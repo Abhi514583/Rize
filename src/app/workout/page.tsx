@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
-import WorkoutControls from "~/components/WorkoutControls";
+import { useRouter } from "next/navigation";
 import PoseOverlay from "~/components/PoseOverlay";
 
 export default function WorkoutPage() {
@@ -10,6 +10,8 @@ export default function WorkoutPage() {
   const [status, setStatus] = useState<"Ready" | "Recording" | "Finished">("Ready");
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
+  const [startTime, setStartTime] = useState<number | null>(null);
+  const router = useRouter();
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -49,10 +51,20 @@ export default function WorkoutPage() {
     };
   }, []);
 
-  const handleStateChange = (state: "idle" | "running" | "stopped") => {
-    if (state === "idle") setStatus("Ready");
-    if (state === "running") setStatus("Recording");
-    if (state === "stopped") setStatus("Finished");
+  const startSession = () => {
+    setStatus("Recording");
+    setReps(0);
+    setStartTime(Date.now());
+  };
+
+  const finishSession = () => {
+    setStatus("Finished");
+    const duration = startTime ? Math.floor((Date.now() - startTime) / 1000) : 0;
+    
+    // Auto-redirect after short analysis delay
+    setTimeout(() => {
+      router.push(`/results?reps=${reps}&duration=${duration}`);
+    }, 1500);
   };
 
   return (
@@ -135,23 +147,44 @@ export default function WorkoutPage() {
         {/* Center: Reps Display (Floating) */}
         <div className="flex-1 flex flex-col items-center justify-center">
           <div className="text-center animate-in fade-in slide-in-from-bottom-8 duration-700">
-            <h2 className={`text-[8rem] font-black tracking-tighter leading-none select-none text-white drop-shadow-[0_0_30px_rgba(255,255,255,0.1)] transition-opacity duration-500 ${status === "Recording" ? "opacity-80" : "opacity-20"}`}>
+            <h2 className={`text-[12rem] font-black tracking-tighter leading-none select-none drop-shadow-[0_0_60px_rgba(244,63,94,0.5)] transition-all duration-500 ${status === "Recording" ? "text-secondary opacity-100 scale-110" : "text-white opacity-20"}`}>
               {reps}
             </h2>
-            <p className="text-[10px] font-black uppercase tracking-[0.5em] text-primary italic mt-2 opacity-40">Consecutive Reps</p>
+            <p className="text-xs font-black uppercase tracking-[0.5em] text-primary italic mt-6 opacity-60">Consecutive Reps</p>
+            
+            {status === "Ready" && !isInitializing && (
+              <button 
+                onClick={startSession}
+                className="mt-12 pointer-events-auto px-12 py-5 bg-primary text-white font-black rounded-2xl hover:scale-105 active:scale-95 transition-all uppercase text-xl tracking-tighter shadow-2xl shadow-primary/40 border border-white/20"
+              >
+                Start Session
+              </button>
+            )}
           </div>
         </div>
 
-        {/* Bottom Floating Controls */}
-        <div className="max-w-md w-full mx-auto pointer-events-auto animate-in fade-in slide-in-from-bottom-12 duration-1000 delay-500 fill-mode-both">
-          <WorkoutControls 
-            onRepsChange={setReps} 
-            onStateChange={handleStateChange}
-          />
+        {/* Bottom Actions */}
+        <div className="flex justify-end w-full animate-in fade-in slide-in-from-bottom-12 duration-1000 delay-500 fill-mode-both px-4">
+          {status === "Recording" && (
+            <button 
+              onClick={finishSession}
+              className="pointer-events-auto flex items-center gap-3 px-8 py-4 bg-black/40 hover:bg-secondary text-white font-black rounded-2xl border border-white/10 transition-all group lg:mb-4"
+            >
+              <span className="text-xs uppercase tracking-widest group-hover:block transition-all">Finish Session</span>
+              <div className="w-4 h-4 rounded bg-secondary group-hover:bg-white transition-colors" />
+            </button>
+          )}
+          
+          {status === "Finished" && (
+            <div className="flex flex-col items-center gap-4 py-8 pointer-events-none">
+              <p className="font-black text-2xl uppercase italic text-gradient leading-tight">Analyzing Results</p>
+              <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Loading Overlay */}
+      {/* Initial Loading Overlay */}
       {isInitializing && (
         <div className="absolute inset-0 z-50 bg-black flex flex-col items-center justify-center gap-6">
           <div className="relative">
