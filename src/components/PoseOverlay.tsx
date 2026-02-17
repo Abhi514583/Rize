@@ -3,9 +3,9 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import {
   PoseLandmarker,
-  FilesetResolver,
   DrawingUtils,
 } from "@mediapipe/tasks-vision";
+import { usePose } from "./PoseProvider";
 
 // MediaPipe Pose connections for full body skeleton
 const POSE_CONNECTIONS = PoseLandmarker.POSE_CONNECTIONS;
@@ -17,87 +17,22 @@ interface PoseOverlayProps {
 
 export default function PoseOverlay({ videoRef, isRunning }: PoseOverlayProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const landmarkerRef = useRef<PoseLandmarker | null>(null);
+  const { landmarker, isLoading: isModelLoading, error: modelError } = usePose();
   const animFrameRef = useRef<number>(0);
   const lastTimeRef = useRef<number>(-1);
   const [poseStatus, setPoseStatus] = useState<"loading" | "detecting" | "detected" | "none">("loading");
 
-  // Initialize PoseLandmarker
+  // Sync state with global loader
   useEffect(() => {
-    let cancelled = false;
-
-    async function init() {
-      try {
-        const vision = await FilesetResolver.forVisionTasks(
-          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
-        );
-
-        const landmarker = await PoseLandmarker.createFromOptions(vision, {
-          baseOptions: {
-            modelAssetPath:
-              "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
-            delegate: "GPU",
-          },
-          runningMode: "VIDEO",
-          numPoses: 1,
-          minPoseDetectionConfidence: 0.5,
-          minPosePresenceConfidence: 0.5,
-          minTrackingConfidence: 0.5,
-          outputSegmentationMasks: false,
-        });
-
-        if (!cancelled) {
-          landmarkerRef.current = landmarker;
-          setPoseStatus("detecting");
-        }
-      } catch (err) {
-        console.error("PoseLandmarker init error:", err);
-        // Fallback to CPU if GPU fails
-        try {
-          const vision = await FilesetResolver.forVisionTasks(
-            "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
-          );
-          const landmarker = await PoseLandmarker.createFromOptions(vision, {
-            baseOptions: {
-              modelAssetPath:
-                "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
-              delegate: "CPU",
-            },
-            runningMode: "VIDEO",
-            numPoses: 1,
-            minPoseDetectionConfidence: 0.5,
-            minPosePresenceConfidence: 0.5,
-            minTrackingConfidence: 0.5,
-            outputSegmentationMasks: false,
-          });
-
-          if (!cancelled) {
-            landmarkerRef.current = landmarker;
-            setPoseStatus("detecting");
-          }
-        } catch (cpuErr) {
-          console.error("PoseLandmarker CPU fallback failed:", cpuErr);
-          if (!cancelled) setPoseStatus("none");
-        }
-      }
-    }
-
-    init();
-
-    return () => {
-      cancelled = true;
-      if (landmarkerRef.current) {
-        landmarkerRef.current.close();
-        landmarkerRef.current = null;
-      }
-    };
-  }, []);
+    if (modelError) setPoseStatus("none");
+    else if (isModelLoading) setPoseStatus("loading");
+    else if (landmarker) setPoseStatus("detecting");
+  }, [isModelLoading, modelError, landmarker]);
 
   // Detection loop
   const detect = useCallback((timestamp: number) => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
-    const landmarker = landmarkerRef.current;
 
     // Safety checks
     if (!video || !canvas || !landmarker || video.readyState < 2) {
@@ -161,33 +96,31 @@ export default function PoseOverlay({ videoRef, isRunning }: PoseOverlayProps) {
     }
 
     animFrameRef.current = requestAnimationFrame(detect);
-  }, [videoRef]);
+  }, [videoRef, landmarker, poseStatus]);
 
   // Unified loop control
   useEffect(() => {
     let active = true;
 
     const startLoop = () => {
-      if (active && isRunning && landmarkerRef.current) {
-        console.log("Starting Pose HUD Loop...");
+      if (active && isRunning && landmarker) {
         lastTimeRef.current = -1;
         animFrameRef.current = requestAnimationFrame(detect);
       }
     };
 
-    // Delay slightly to ensure video and landmarker are hot
+    // Delay slightly to ensure video is hot
     const timeout = setTimeout(startLoop, 1000);
 
     return () => {
       active = false;
       clearTimeout(timeout);
       if (animFrameRef.current) {
-        console.log("Stopping Pose HUD Loop...");
         cancelAnimationFrame(animFrameRef.current);
         animFrameRef.current = 0;
       }
     };
-  }, [isRunning, detect, poseStatus === "loading"]); // Restarts if we finish loading
+  }, [isRunning, detect, landmarker]);
 
   return (
     <>
