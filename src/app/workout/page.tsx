@@ -81,7 +81,11 @@ export default function WorkoutPage() {
               className={`w-full h-full object-cover scale-x-[-1] transition-opacity duration-1000 ${isInitializing ? "opacity-0" : "opacity-100"}`}
             />
             {/* MediaPipe Pose Overlay */}
-            <PoseOverlay videoRef={videoRef} isRunning={!isInitializing && !cameraError} />
+            <PoseOverlay 
+              videoRef={videoRef} 
+              isRunning={!isInitializing && !cameraError} 
+              onRepChange={setReps}
+            />
           </>
         )}
         {/* Cinematic Overlay */}
