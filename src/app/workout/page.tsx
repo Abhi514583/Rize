@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import WorkoutControls from "~/components/WorkoutControls";
+import PoseOverlay from "~/components/PoseOverlay";
 
 export default function WorkoutPage() {
   const [reps, setReps] = useState(0);
@@ -71,21 +72,25 @@ export default function WorkoutPage() {
             </button>
           </div>
         ) : (
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted
-            className={`w-full h-full object-cover scale-x-[-1] transition-opacity duration-1000 ${isInitializing ? "opacity-0" : "opacity-100"}`}
-          />
+          <>
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
+              className={`w-full h-full object-cover scale-x-[-1] transition-opacity duration-1000 ${isInitializing ? "opacity-0" : "opacity-100"}`}
+            />
+            {/* MediaPipe Pose Overlay */}
+            <PoseOverlay videoRef={videoRef} isRunning={!isInitializing && !cameraError} />
+          </>
         )}
         {/* Cinematic Overlay */}
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,transparent_0%,rgba(0,0,0,0.5)_100%)] pointer-events-none" />
-        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/40 pointer-events-none" />
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,transparent_0%,rgba(0,0,0,0.3)_100%)] pointer-events-none" style={{ zIndex: 6 }} />
+        <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-black/30 pointer-events-none" style={{ zIndex: 6 }} />
       </div>
 
-      {/* 2. ML Alignment & Pose Layer (HUD) */}
-      {!isInitializing && !cameraError && (
+      {/* 2. ML Alignment Guide (HUD) — only when no pose detected yet */}
+      {!isInitializing && !cameraError && status === "Ready" && (
         <div className="absolute inset-0 z-10 pointer-events-none flex items-center justify-center">
           <div className="relative w-full h-full max-w-4xl max-h-[70vh] border-2 border-white/10 rounded-[3rem] animate-in fade-in zoom-in duration-1000">
             {/* Guide Corners */}
@@ -93,16 +98,6 @@ export default function WorkoutPage() {
             <div className="absolute top-0 right-0 w-12 h-12 border-t-4 border-r-4 border-primary/40 rounded-tr-[3rem]" />
             <div className="absolute bottom-0 left-0 w-12 h-12 border-b-4 border-l-4 border-primary/40 rounded-bl-[3rem]" />
             <div className="absolute bottom-0 right-0 w-12 h-12 border-b-4 border-r-4 border-primary/40 rounded-br-[3rem]" />
-            
-            {/* Alignment Guide Text */}
-            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center gap-4 text-center">
-              {status === "Ready" && (
-                <div className="glass px-8 py-4 rounded-3xl border-primary/20 animate-bounce">
-                  <p className="text-xl font-black italic uppercase text-primary">Align for Pushups</p>
-                  <p className="text-[10px] font-bold uppercase tracking-[0.3em] opacity-60">Full body visible</p>
-                </div>
-              )}
-            </div>
           </div>
         </div>
       )}
