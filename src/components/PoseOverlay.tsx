@@ -43,6 +43,7 @@ export default function PoseOverlay({ videoRef, isRunning }: PoseOverlayProps) {
           minPoseDetectionConfidence: 0.5,
           minPosePresenceConfidence: 0.5,
           minTrackingConfidence: 0.5,
+          outputSegmentationMasks: false,
         });
 
         if (!cancelled) {
@@ -67,6 +68,7 @@ export default function PoseOverlay({ videoRef, isRunning }: PoseOverlayProps) {
             minPoseDetectionConfidence: 0.5,
             minPosePresenceConfidence: 0.5,
             minTrackingConfidence: 0.5,
+            outputSegmentationMasks: false,
           });
 
           if (!cancelled) {
@@ -92,17 +94,18 @@ export default function PoseOverlay({ videoRef, isRunning }: PoseOverlayProps) {
   }, []);
 
   // Detection loop
-  const detect = useCallback(() => {
+  const detect = useCallback((timestamp: number) => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
     const landmarker = landmarkerRef.current;
 
+    // Safety checks
     if (!video || !canvas || !landmarker || video.readyState < 2) {
       animFrameRef.current = requestAnimationFrame(detect);
       return;
     }
 
-    // Size canvas to match the video's rendered dimensions
+    // Ensure canvas matches video render size
     const rect = video.getBoundingClientRect();
     if (canvas.width !== rect.width || canvas.height !== rect.height) {
       canvas.width = rect.width;
@@ -115,16 +118,16 @@ export default function PoseOverlay({ videoRef, isRunning }: PoseOverlayProps) {
       return;
     }
 
-    const now = performance.now();
-    // Only detect if time has advanced (MediaPipe needs monotonically increasing timestamps)
-    if (now <= lastTimeRef.current) {
+    // MediaPipe requires strictly increasing timestamps. 
+    // requestAnimationFrame's timestamp is perfect for this.
+    if (timestamp <= lastTimeRef.current) {
       animFrameRef.current = requestAnimationFrame(detect);
       return;
     }
-    lastTimeRef.current = now;
+    lastTimeRef.current = timestamp;
 
     try {
-      const results = landmarker.detectForVideo(video, now);
+      const results = landmarker.detectForVideo(video, timestamp);
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -132,13 +135,13 @@ export default function PoseOverlay({ videoRef, isRunning }: PoseOverlayProps) {
         const drawingUtils = new DrawingUtils(ctx);
 
         for (const landmarks of results.landmarks) {
-          // Draw connectors (skeleton lines) — soft green
+          // Draw connectors (skeleton lines)
           drawingUtils.drawConnectors(landmarks, POSE_CONNECTIONS, {
             color: "rgba(166, 215, 132, 0.85)",
             lineWidth: 3,
           });
 
-          // Draw landmarks (joints) — slightly brighter green dots
+          // Draw landmarks (joints)
           drawingUtils.drawLandmarks(landmarks, {
             color: "rgba(200, 240, 180, 0.9)",
             fillColor: "rgba(166, 215, 132, 0.7)",
@@ -147,43 +150,44 @@ export default function PoseOverlay({ videoRef, isRunning }: PoseOverlayProps) {
           });
         }
 
-        setPoseStatus("detected");
+        setPoseStatus(prev => prev !== "detected" ? "detected" : prev);
       } else {
-        setPoseStatus("detecting");
+        setPoseStatus(prev => prev !== "detecting" ? "detecting" : prev);
       }
-    } catch {
-      // Silently skip frame on error
+    } catch (err) {
+      // Packet timestamp mismatch can happen during tab switching, just reset and continue
+      console.warn("MediaPipe detect error:", err);
+      lastTimeRef.current = -1; 
     }
 
     animFrameRef.current = requestAnimationFrame(detect);
   }, [videoRef]);
 
-  // Start / stop the detection loop
+  // Unified loop control
   useEffect(() => {
-    if (isRunning && landmarkerRef.current) {
-      lastTimeRef.current = -1;
-      animFrameRef.current = requestAnimationFrame(detect);
-    }
+    let active = true;
 
-    return () => {
-      if (animFrameRef.current) {
-        cancelAnimationFrame(animFrameRef.current);
+    const startLoop = () => {
+      if (active && isRunning && landmarkerRef.current) {
+        console.log("Starting Pose HUD Loop...");
+        lastTimeRef.current = -1;
+        animFrameRef.current = requestAnimationFrame(detect);
       }
     };
-  }, [isRunning, detect]);
 
-  // Also start detecting once landmarker loads if already running
-  useEffect(() => {
-    if (poseStatus === "detecting" && isRunning) {
-      lastTimeRef.current = -1;
-      animFrameRef.current = requestAnimationFrame(detect);
-    }
+    // Delay slightly to ensure video and landmarker are hot
+    const timeout = setTimeout(startLoop, 1000);
+
     return () => {
+      active = false;
+      clearTimeout(timeout);
       if (animFrameRef.current) {
+        console.log("Stopping Pose HUD Loop...");
         cancelAnimationFrame(animFrameRef.current);
+        animFrameRef.current = 0;
       }
     };
-  }, [poseStatus, isRunning, detect]);
+  }, [isRunning, detect, poseStatus === "loading"]); // Restarts if we finish loading
 
   return (
     <>

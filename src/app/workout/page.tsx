@@ -131,10 +131,10 @@ export default function WorkoutPage() {
         {/* Center: Reps Display (Floating) */}
         <div className="flex-1 flex flex-col items-center justify-center">
           <div className="text-center animate-in fade-in slide-in-from-bottom-8 duration-700">
-            <h2 className="text-[12rem] font-black tracking-tighter leading-none select-none text-white drop-shadow-[0_0_50px_rgba(255,255,255,0.2)]">
+            <h2 className={`text-[8rem] font-black tracking-tighter leading-none select-none text-white drop-shadow-[0_0_30px_rgba(255,255,255,0.1)] transition-opacity duration-500 ${status === "Recording" ? "opacity-80" : "opacity-20"}`}>
               {reps}
             </h2>
-            <p className="text-xs font-black uppercase tracking-[0.5em] text-primary italic mt-4">Consecutive Reps</p>
+            <p className="text-[10px] font-black uppercase tracking-[0.5em] text-primary italic mt-2 opacity-40">Consecutive Reps</p>
           </div>
         </div>
 
