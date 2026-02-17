@@ -28,11 +28,26 @@ export default function RootLayout({
     <html lang="en" className="dark" suppressHydrationWarning>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground min-h-screen`}
+        suppressHydrationWarning
       >
         <nav className="sticky top-0 z-50 glass h-16 px-6 flex items-center justify-between">
-          <Link href="/" className="text-xl font-bold tracking-tighter hover:opacity-80 transition-opacity">
-            RIZE
-          </Link>
+          <div className="flex items-center gap-4">
+            <Link href="/" className="text-xl font-black tracking-tighter hover:opacity-80 transition-opacity italic text-primary">
+              RIZE
+            </Link>
+            
+            {/* Leader Status Pill */}
+            <div className="hidden sm:flex items-center gap-2 px-3 py-1 rounded-full bg-white/[0.03] border border-white/5 hover:border-primary/30 transition-colors group cursor-default">
+              <span className="text-sm">🇨🇦</span>
+              <div className="flex flex-col">
+                <span className="text-[9px] font-black uppercase tracking-widest text-muted-foreground leading-none">Global Lead</span>
+                <div className="flex items-center gap-1">
+                  <span className="text-[11px] font-bold">Canada</span>
+                  <span className="text-[10px] font-black text-success animate-pulse">+2.4k</span>
+                </div>
+              </div>
+            </div>
+          </div>
           <div className="flex gap-6 items-center">
             <Link href="/workout" className="text-sm font-medium hover:text-primary transition-colors">
               Train

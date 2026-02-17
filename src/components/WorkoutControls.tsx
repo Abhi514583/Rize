@@ -49,66 +49,70 @@ export default function WorkoutControls({ onRepsChange, onStateChange }: Workout
   };
 
   return (
-    <div className="flex flex-col items-center gap-6 w-full max-w-md">
-      {state === "idle" && (
-        <button
-          onClick={startWorkout}
-          className="w-full py-8 bg-primary text-white font-black text-2xl rounded-[2rem] shadow-[0_20px_50px_rgba(99,102,241,0.3)] hover:scale-[1.02] active:scale-[0.98] transition-all relative overflow-hidden group uppercase tracking-tight"
-        >
-          <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-300" />
-          <span className="relative z-10">Start Session</span>
-        </button>
-      )}
+    <div className="w-full glass backdrop-blur-3xl rounded-[2.5rem] p-6 shadow-[0_30px_100px_rgba(0,0,0,0.5)] border-white/10 relative overflow-hidden group">
+      <div className="absolute inset-0 bg-primary/5 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
+      
+      <div className="flex flex-col items-center gap-6 relative z-10">
+        {state === "idle" && (
+          <button
+            onClick={startWorkout}
+            className="w-full py-6 bg-primary text-white font-black text-xl rounded-2xl shadow-[0_20px_50px_rgba(99,102,241,0.3)] hover:scale-[1.02] active:scale-[0.98] transition-all relative overflow-hidden group uppercase tracking-tight"
+          >
+            <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-300" />
+            <span className="relative z-10">Start Session</span>
+          </button>
+        )}
 
-      {state === "running" && (
-        <div className="flex flex-col items-center gap-8 w-full animate-in fade-in zoom-in duration-300">
-          <div className="flex items-center gap-3 glass px-6 py-2 rounded-full border-secondary/20 shadow-[0_0_20px_rgba(244,63,94,0.2)]">
-            <div className="relative flex items-center justify-center">
-              <span className="absolute w-4 h-4 bg-secondary rounded-full animate-ping opacity-75" />
-              <span className="relative w-3 h-3 bg-secondary rounded-full" />
+        {state === "running" && (
+          <div className="flex flex-col items-center gap-6 w-full animate-in fade-in zoom-in duration-300">
+            <div className="flex items-center gap-3 glass px-4 py-2 rounded-full border-secondary/20 shadow-[0_0_20px_rgba(244,63,94,0.2)] bg-black/40">
+              <div className="relative flex items-center justify-center">
+                <span className="absolute w-3 h-3 bg-secondary rounded-full animate-ping opacity-75" />
+                <span className="relative w-2 h-2 bg-secondary rounded-full" />
+              </div>
+              <span className="text-[10px] font-black tracking-[0.2em] uppercase text-secondary">Recording</span>
             </div>
-            <span className="text-[11px] font-black tracking-[0.2em] uppercase text-secondary">Recording</span>
-          </div>
-          
-          <button
-            onClick={() => {
-              setReps((prev) => {
-                const newReps = prev + 1;
-                onRepsChange(newReps);
-                return newReps;
-              });
-            }}
-            className="w-40 h-40 rounded-full glass border-4 border-primary/20 flex flex-col items-center justify-center hover:bg-white/5 active:scale-90 transition-all shadow-2xl group"
-          >
-            <span className="text-5xl font-black group-hover:scale-110 transition-transform">{reps}</span>
-            <span className="text-[10px] font-black border-t border-white/10 mt-2 pt-1 uppercase tracking-tighter text-muted-foreground group-hover:text-primary transition-colors">Log Rep</span>
-          </button>
+            
+            <div className="flex items-center gap-4 w-full">
+              <button
+                onClick={() => {
+                  setReps((prev) => {
+                    const newReps = prev + 1;
+                    onRepsChange(newReps);
+                    return newReps;
+                  });
+                }}
+                className="flex-1 py-10 rounded-2xl glass border-white/5 flex flex-col items-center justify-center hover:bg-white/5 active:scale-95 transition-all group"
+              >
+                <span className="text-4xl font-black group-hover:scale-110 transition-transform">{reps}</span>
+                <span className="text-[9px] font-black border-t border-white/10 mt-2 pt-1 uppercase tracking-widest text-muted-foreground group-hover:text-primary transition-colors">Manual Rep</span>
+              </button>
 
-          <button
-            onClick={stopWorkout}
-            className="w-full py-4 bg-white/[0.03] border border-white/10 text-white font-black rounded-2xl hover:bg-secondary hover:border-secondary transition-all uppercase tracking-widest text-sm"
-          >
-            Finish Workout
-          </button>
-          
-          <div className="flex items-center gap-2 opacity-40">
-            <span className="text-[10px] font-bold uppercase tracking-widest">Spacebar = +1</span>
+              <button
+                onClick={stopWorkout}
+                className="w-20 h-auto self-stretch bg-white/[0.03] border border-white/10 text-white font-black rounded-2xl hover:bg-secondary hover:border-secondary transition-all flex items-center justify-center group"
+                title="Finish Workout"
+              >
+                <div className="w-8 h-8 rounded-lg bg-secondary/20 flex items-center justify-center group-hover:bg-white/20 transition-colors">
+                  <div className="w-3 h-3 bg-secondary group-hover:bg-white rounded-sm" />
+                </div>
+              </button>
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {state === "stopped" && (
-        <div className="flex flex-col items-center gap-6 py-8 animate-in fade-in duration-500">
-          <div className="text-center">
-            <p className="font-black text-3xl uppercase italic text-gradient leading-tight">Analyzing Performance</p>
-            <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-muted-foreground mt-2">Uploading metadata...</p>
+        {state === "stopped" && (
+          <div className="flex flex-col items-center gap-4 py-4 animate-in fade-in duration-500">
+            <div className="text-center">
+              <p className="font-black text-2xl uppercase italic text-gradient leading-tight">Analyzing</p>
+            </div>
+            <div className="relative w-10 h-10">
+              <div className="absolute inset-0 border-4 border-white/5 rounded-full" />
+              <div className="absolute inset-0 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+            </div>
           </div>
-          <div className="relative w-12 h-12">
-            <div className="absolute inset-0 border-4 border-white/5 rounded-full" />
-            <div className="absolute inset-0 border-4 border-primary border-t-transparent rounded-full animate-spin" />
-          </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

@@ -1,12 +1,52 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import WorkoutControls from "~/components/WorkoutControls";
 
 export default function WorkoutPage() {
   const [reps, setReps] = useState(0);
   const [status, setStatus] = useState<"Ready" | "Recording" | "Finished">("Ready");
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [isInitializing, setIsInitializing] = useState(true);
+  
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+
+  const startCamera = async () => {
+    setIsInitializing(true);
+    setCameraError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { 
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+          facingMode: "user"
+        } 
+      });
+      
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        streamRef.current = stream;
+      }
+      setCameraError(null);
+    } catch (err) {
+      console.error("Camera access error:", err);
+      setCameraError("Camera access denied");
+    } finally {
+      setIsInitializing(false);
+    }
+  };
+
+  useEffect(() => {
+    startCamera();
+
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, []);
 
   const handleStateChange = (state: "idle" | "running" | "stopped") => {
     if (state === "idle") setStatus("Ready");
@@ -15,48 +55,116 @@ export default function WorkoutPage() {
   };
 
   return (
-    <div className="flex flex-col h-[calc(100vh-64px)] p-6">
-      {/* Top Bar */}
-      <div className="flex items-center justify-between mb-8">
-        <Link href="/" className="glass p-2 rounded-full hover:bg-white/5 transition-colors">
-          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-          </svg>
-        </Link>
-        <span className={`text-sm font-black uppercase tracking-widest ${status === "Recording" ? "text-red-500" : "text-muted-foreground"}`}>
-          {status}
-        </span>
-        <div className="glass p-2 rounded-full opacity-40">
-          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-          </svg>
+    <div className="relative h-[calc(100vh-64px)] w-full overflow-hidden bg-black font-sans">
+      {/* 1. Immersive Camera Layer */}
+      <div className="absolute inset-0 z-0">
+        {cameraError ? (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900 p-8 text-center">
+            <div className="w-20 h-20 bg-secondary/10 rounded-full flex items-center justify-center text-secondary mb-6">
+              <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+            </div>
+            <p className="text-2xl font-black italic uppercase text-gradient mb-4">{cameraError}</p>
+            <button onClick={startCamera} className="px-8 py-3 bg-secondary text-white font-black rounded-full hover:scale-105 active:scale-95 transition-all uppercase text-xs tracking-widest shadow-lg shadow-secondary/20">
+              Try Again
+            </button>
+          </div>
+        ) : (
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            className={`w-full h-full object-cover scale-x-[-1] transition-opacity duration-1000 ${isInitializing ? "opacity-0" : "opacity-100"}`}
+          />
+        )}
+        {/* Cinematic Overlay */}
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,transparent_0%,rgba(0,0,0,0.5)_100%)] pointer-events-none" />
+        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/40 pointer-events-none" />
+      </div>
+
+      {/* 2. ML Alignment & Pose Layer (HUD) */}
+      {!isInitializing && !cameraError && (
+        <div className="absolute inset-0 z-10 pointer-events-none flex items-center justify-center">
+          <div className="relative w-full h-full max-w-4xl max-h-[70vh] border-2 border-white/10 rounded-[3rem] animate-in fade-in zoom-in duration-1000">
+            {/* Guide Corners */}
+            <div className="absolute top-0 left-0 w-12 h-12 border-t-4 border-l-4 border-primary/40 rounded-tl-[3rem]" />
+            <div className="absolute top-0 right-0 w-12 h-12 border-t-4 border-r-4 border-primary/40 rounded-tr-[3rem]" />
+            <div className="absolute bottom-0 left-0 w-12 h-12 border-b-4 border-l-4 border-primary/40 rounded-bl-[3rem]" />
+            <div className="absolute bottom-0 right-0 w-12 h-12 border-b-4 border-r-4 border-primary/40 rounded-br-[3rem]" />
+            
+            {/* Alignment Guide Text */}
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center gap-4 text-center">
+              {status === "Ready" && (
+                <div className="glass px-8 py-4 rounded-3xl border-primary/20 animate-bounce">
+                  <p className="text-xl font-black italic uppercase text-primary">Align for Pushups</p>
+                  <p className="text-[10px] font-bold uppercase tracking-[0.3em] opacity-60">Full body visible</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 3. Floating UI Controls Overlay */}
+      <div className="absolute inset-0 z-20 pointer-events-none p-8 flex flex-col">
+        {/* Top Floating Bar */}
+        <div className="flex items-center justify-between w-full pointer-events-auto">
+          <div className="flex items-center gap-4">
+            <Link href="/" className="glass p-4 rounded-full hover:bg-white/10 transition-colors group">
+              <svg className="w-6 h-6 group-hover:-translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M15 19l-7-7 7-7" />
+              </svg>
+            </Link>
+            <div className="glass px-6 py-2 rounded-full border-primary/20">
+              <span className="text-xs font-black uppercase tracking-[0.3em] text-primary italic">Live Session</span>
+            </div>
+          </div>
+          
+          <div className="glass px-6 py-3 rounded-2xl flex flex-col items-end">
+            <span className="text-[10px] font-black uppercase tracking-widest opacity-40">Status</span>
+            <div className="flex items-center gap-2">
+              {status === "Recording" && <span className="w-2 h-2 bg-secondary rounded-full animate-ping" />}
+              <span className={`text-sm font-black uppercase tracking-widest ${status === "Recording" ? "text-secondary" : "text-white"}`}>
+                {status}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Center: Reps Display (Floating) */}
+        <div className="flex-1 flex flex-col items-center justify-center">
+          <div className="text-center animate-in fade-in slide-in-from-bottom-8 duration-700">
+            <h2 className="text-[12rem] font-black tracking-tighter leading-none select-none text-white drop-shadow-[0_0_50px_rgba(255,255,255,0.2)]">
+              {reps}
+            </h2>
+            <p className="text-xs font-black uppercase tracking-[0.5em] text-primary italic mt-4">Consecutive Reps</p>
+          </div>
+        </div>
+
+        {/* Bottom Floating Controls */}
+        <div className="max-w-md w-full mx-auto pointer-events-auto animate-in fade-in slide-in-from-bottom-12 duration-1000 delay-500 fill-mode-both">
+          <WorkoutControls 
+            onRepsChange={setReps} 
+            onStateChange={handleStateChange}
+          />
         </div>
       </div>
 
-      {/* Camera Section */}
-      <div className="flex-1 glass rounded-3xl border-2 border-white/5 overflow-hidden relative mb-8 flex flex-col items-center justify-center bg-black/20 group">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,transparent_0%,rgba(0,0,0,0.4)_100%)]" />
-        <div className="flex flex-col items-center gap-4 z-10 opacity-30 group-hover:opacity-50 transition-opacity">
-          <svg className="w-20 h-20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-          </svg>
-          <p className="text-lg font-bold">Camera preview will appear here</p>
+      {/* Loading Overlay */}
+      {isInitializing && (
+        <div className="absolute inset-0 z-50 bg-black flex flex-col items-center justify-center gap-6">
+          <div className="relative">
+            <div className="absolute inset-0 w-16 h-16 border-4 border-primary/20 rounded-full" />
+            <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+          </div>
+          <div className="text-center">
+            <p className="text-2xl font-black italic uppercase text-gradient">Initializing AI</p>
+            <p className="text-[10px] font-bold uppercase tracking-[0.3em] opacity-40 mt-1">Calibrating your workspace...</p>
+          </div>
         </div>
-      </div>
-
-      {/* Counter & Controls */}
-      <div className="flex flex-col items-center gap-8">
-        <div className="text-center">
-          <h2 className="text-7xl font-black tracking-tighter mb-1 select-none">Reps: {reps}</h2>
-          <p className="text-sm font-bold uppercase tracking-widest text-muted-foreground opacity-60 italic">Keep elbows visible in frame</p>
-        </div>
-
-        <WorkoutControls 
-          onRepsChange={setReps} 
-          onStateChange={handleStateChange}
-        />
-      </div>
+      )}
     </div>
   );
 }
