@@ -11,19 +11,26 @@ import {
   clamp,
   createRepEngine,
   tickRepEngine,
+  distance,
+  avgPoint,
+  BodyDepthTracker,
   type RepPhase,
+  type Point,
 } from "~/lib/poseMath";
 
 const POSE_CONNECTIONS = PoseLandmarker.POSE_CONNECTIONS;
 
-// ─── Thresholds ──────────────────────────────────────────────────────
-const A_UP = 155;
-const A_DOWN = 90;
-const VIS_THRESHOLD = 0.5;
+// ─── Constants ───────────────────────────────────────────────────────
+const A_DOWN = 95; // Fixed down threshold for stability
+const VIS_SIDE = 0.5;
+const VIS_FRONT = 0.55;
+
+export type CameraMode = "front" | "side";
 
 interface PoseOverlayProps {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   isRunning: boolean;
+  mode: CameraMode;
   onRepChange?: (reps: number) => void;
   onPhaseChange?: (phase: RepPhase) => void;
 }
@@ -31,6 +38,7 @@ interface PoseOverlayProps {
 export default function PoseOverlay({
   videoRef,
   isRunning,
+  mode,
   onRepChange,
   onPhaseChange,
 }: PoseOverlayProps) {
@@ -44,11 +52,20 @@ export default function PoseOverlay({
     "loading" | "detecting" | "detected" | "none"
   >("loading");
 
+  // Calibration state
+  const [calibrationProgress, setCalibrationProgress] = useState(0);
+  const dynamicUpRef = useRef(150);
+  const calibrationFramesRef = useRef(0);
+  const maxAngleAccumRef = useRef<number[]>([]);
+
   // ─── Refs for zero-lag state (never causes re-render) ──────────────
   const repEngineRef = useRef(createRepEngine());
   const lastRepCountRef = useRef(0);
+  const lastPhaseRef = useRef<RepPhase>("UP");
+  const depthTrackerRef = useRef(new BodyDepthTracker());
+  const isValidRepRef = useRef(true);
 
-  // Smoothers — one per joint we care about (6 joints)
+  // Smoothers
   const smoothersRef = useRef({
     shoulder: new PositionSmoother(0.45),
     elbow: new PositionSmoother(0.45),
@@ -57,11 +74,23 @@ export default function PoseOverlay({
     knee: new PositionSmoother(0.45),
     ankle: new PositionSmoother(0.45),
   });
+
+  const frontSmoothersRef = useRef({
+    lShoulder: new PositionSmoother(0.45),
+    rShoulder: new PositionSmoother(0.45),
+    lElbow: new PositionSmoother(0.45),
+    rElbow: new PositionSmoother(0.45),
+    lWrist: new PositionSmoother(0.45),
+    rWrist: new PositionSmoother(0.45),
+  });
+
   const elbowEMA = useRef(new EMA(0.35));
   const hipEMA = useRef(new EMA(0.35));
   const kneeEMA = useRef(new EMA(0.35));
+  const leftElbowEMA = useRef(new EMA(0.35));
+  const rightElbowEMA = useRef(new EMA(0.35));
 
-  // Sync status with global loader
+  // Sync status
   useEffect(() => {
     if (modelError) setPoseStatus("none");
     else if (isModelLoading) setPoseStatus("loading");
@@ -69,14 +98,7 @@ export default function PoseOverlay({
   }, [isModelLoading, modelError, landmarker]);
 
   // ─── Drawing Helpers ───────────────────────────────────────────────
-  function drawLine(
-    ctx: CanvasRenderingContext2D,
-    pts: { x: number; y: number }[],
-    w: number,
-    h: number,
-    color: string,
-    lineW = 4,
-  ) {
+  function drawLine(ctx: CanvasRenderingContext2D, pts: Point[], w: number, h: number, color: string, lineW = 4) {
     ctx.beginPath();
     pts.forEach((p, i) => {
       const px = p.x * w;
@@ -87,26 +109,16 @@ export default function PoseOverlay({
     ctx.strokeStyle = color;
     ctx.lineWidth = lineW;
     ctx.lineCap = "round";
-    ctx.lineJoin = "round";
     ctx.stroke();
   }
 
-  function drawJoint(
-    ctx: CanvasRenderingContext2D,
-    p: { x: number; y: number },
-    w: number,
-    h: number,
-    color = "#a6d784",
-    radius = 7,
-  ) {
+  function drawJoint(ctx: CanvasRenderingContext2D, p: Point, w: number, h: number, color = "#a6d784", radius = 7) {
     const px = p.x * w;
     const py = p.y * h;
-    // Outer glow
     ctx.beginPath();
     ctx.arc(px, py, radius + 3, 0, Math.PI * 2);
-    ctx.fillStyle = color + "33"; // 20% alpha glow
+    ctx.fillStyle = color + "33";
     ctx.fill();
-    // Main dot
     ctx.beginPath();
     ctx.arc(px, py, radius, 0, Math.PI * 2);
     ctx.fillStyle = color;
@@ -116,475 +128,302 @@ export default function PoseOverlay({
     ctx.stroke();
   }
 
-  /** Draws text that reads correctly on the CSS-mirrored canvas. */
-  function drawMirroredText(
-    ctx: CanvasRenderingContext2D,
-    text: string,
-    normX: number,
-    normY: number,
-    w: number,
-    h: number,
-    font: string,
-    color: string,
-    align: CanvasTextAlign = "left",
-  ) {
+  function drawMirroredText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, w: number, h: number, font: string, color: string, align: CanvasTextAlign = "center") {
     ctx.save();
-    const px = normX * w;
-    const py = normY * h;
-    // The canvas is CSS scale-x-[-1], so we counter-mirror at this point
-    ctx.translate(px, py);
+    ctx.translate(x * w, y * h);
     ctx.scale(-1, 1);
     ctx.font = font;
     ctx.fillStyle = color;
     ctx.textAlign = align;
-    ctx.shadowColor = "rgba(0,0,0,0.8)";
-    ctx.shadowBlur = 6;
+    ctx.shadowBlur = 4;
+    ctx.shadowColor = "black";
     ctx.fillText(text, 0, 0);
     ctx.restore();
   }
 
-  /** Draws text at pixel positions with counter-mirror. */
-  function drawMirroredTextPx(
-    ctx: CanvasRenderingContext2D,
-    text: string,
-    px: number,
-    py: number,
-    font: string,
-    color: string,
-    align: CanvasTextAlign = "left",
-  ) {
+  function drawMirroredTextPx(ctx: CanvasRenderingContext2D, text: string, xPx: number, yPx: number, font: string, color: string, align: CanvasTextAlign = "center") {
     ctx.save();
-    ctx.translate(px, py);
+    ctx.translate(xPx, yPx);
     ctx.scale(-1, 1);
     ctx.font = font;
     ctx.fillStyle = color;
     ctx.textAlign = align;
-    ctx.shadowColor = "rgba(0,0,0,0.8)";
-    ctx.shadowBlur = 6;
+    ctx.shadowBlur = 4;
+    ctx.shadowColor = "black";
     ctx.fillText(text, 0, 0);
     ctx.restore();
   }
 
-  function drawProgressBar(
-    ctx: CanvasRenderingContext2D,
-    x: number,
-    y: number,
-    barW: number,
-    barH: number,
-    progress: number,
-    color: string,
-    label: string,
-    pct: string,
-  ) {
+  function drawBigIndicator(ctx: CanvasRenderingContext2D, text: string, color: string, W: number, H: number) {
     ctx.save();
-    // We need to counter-mirror the whole block
-    ctx.translate(x, y);
+    ctx.translate(W / 2, H * 0.2);
     ctx.scale(-1, 1);
-
-    // Background
-    ctx.fillStyle = "rgba(0,0,0,0.4)";
-    ctx.beginPath();
-    ctx.roundRect(-barW, 0, barW, barH, 8);
-    ctx.fill();
-
-    // Fill
-    const fillH = barH * clamp(progress, 0, 1);
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.roundRect(-barW, barH - fillH, barW, fillH, 8);
-    ctx.fill();
-
-    // Label
-    ctx.font = "900 28px 'Inter', sans-serif";
-    ctx.fillStyle = color;
+    ctx.font = "black 900 48px Inter";
     ctx.textAlign = "center";
-    ctx.shadowColor = "rgba(0,0,0,0.8)";
-    ctx.shadowBlur = 6;
-    ctx.fillText(label, -barW / 2, -14);
-
-    // Percentage
-    ctx.font = "700 18px 'Inter', sans-serif";
-    ctx.fillStyle = "rgba(255,255,255,0.9)";
-    ctx.fillText(pct, -barW / 2, -40);
-
+    ctx.fillStyle = color;
+    ctx.strokeStyle = "black";
+    ctx.lineWidth = 4;
+    ctx.strokeText(text, 0, 0);
+    ctx.fillText(text, 0, 0);
     ctx.restore();
   }
 
   // ─── Main Detection Loop ──────────────────────────────────────────
-  const detect = useCallback(
-    (timestamp: number) => {
-      const video = videoRef.current;
-      const canvas = canvasRef.current;
-      if (!video || !canvas || !landmarker || video.readyState < 2) {
-        animFrameRef.current = requestAnimationFrame(detect);
-        return;
-      }
+  const detect = useCallback((timestamp: number) => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas || !landmarker || video.readyState < 2) {
+      animFrameRef.current = requestAnimationFrame(detect);
+      return;
+    }
 
-      const rect = video.getBoundingClientRect();
-      if (canvas.width !== rect.width || canvas.height !== rect.height) {
-        canvas.width = rect.width;
-        canvas.height = rect.height;
-      }
+    const rect = video.getBoundingClientRect();
+    if (canvas.width !== rect.width || canvas.height !== rect.height) {
+      canvas.width = rect.width;
+      canvas.height = rect.height;
+    }
 
-      const ctx = canvas.getContext("2d");
-      if (!ctx) {
-        animFrameRef.current = requestAnimationFrame(detect);
-        return;
-      }
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    if (timestamp <= lastTimeRef.current) {
+      animFrameRef.current = requestAnimationFrame(detect);
+      return;
+    }
+    lastTimeRef.current = timestamp;
 
-      if (timestamp <= lastTimeRef.current) {
-        animFrameRef.current = requestAnimationFrame(detect);
-        return;
-      }
-      lastTimeRef.current = timestamp;
+    try {
+      const results = landmarker.detectForVideo(video, timestamp);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const W = canvas.width;
+      const H = canvas.height;
 
-      try {
-        const results = landmarker.detectForVideo(video, timestamp);
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        const W = canvas.width;
-        const H = canvas.height;
+      if (results.landmarks && results.landmarks.length > 0) {
+        const lm = results.landmarks[0];
+        const drawingUtils = new DrawingUtils(ctx);
 
-        if (results.landmarks && results.landmarks.length > 0) {
-          const lm = results.landmarks[0];
-          const drawingUtils = new DrawingUtils(ctx);
+        drawingUtils.drawConnectors(lm, POSE_CONNECTIONS, { color: "rgba(255,255,255,0.1)", lineWidth: 1 });
 
-          // ─── 1. Side Selection ───────────────────────────────
-          const lVis =
-            (lm[11].visibility || 0) +
-            (lm[13].visibility || 0) +
-            (lm[15].visibility || 0) +
-            (lm[23].visibility || 0) +
-            (lm[25].visibility || 0) +
-            (lm[27].visibility || 0);
-          const rVis =
-            (lm[12].visibility || 0) +
-            (lm[14].visibility || 0) +
-            (lm[16].visibility || 0) +
-            (lm[24].visibility || 0) +
-            (lm[26].visibility || 0) +
-            (lm[28].visibility || 0);
-          const o = lVis >= rVis ? 0 : 1; // offset
+        let elbowAngle = 0;
+        let isSymmetric = true;
+        let angleDiff = 0;
+        let depthOk = false;
+        let shoulderWidthPx = 0;
+        let currentDepthSignal = 0;
+        let targetDepth = 0;
 
-          const rawShoulder = lm[11 + o];
-          const rawElbow = lm[13 + o];
-          const rawWrist = lm[15 + o];
-          const rawHip = lm[23 + o];
-          const rawKnee = lm[25 + o];
-          const rawAnkle = lm[27 + o];
+        if (mode === "side") {
+          const lVis = (lm[11].visibility || 0) + (lm[13].visibility || 0) + (lm[15].visibility || 0) + (lm[23].visibility || 0) + (lm[25].visibility || 0) + (lm[27].visibility || 0);
+          const rVis = (lm[12].visibility || 0) + (lm[14].visibility || 0) + (lm[16].visibility || 0) + (lm[24].visibility || 0) + (lm[26].visibility || 0) + (lm[28].visibility || 0);
+          const o = lVis >= rVis ? 0 : 1;
+          const rawS = lm[11+o], rawE = lm[13+o], rawW = lm[15+o], rawH = lm[23+o], rawK = lm[25+o], rawA = lm[27+o];
 
-          // ─── 2. Visibility Gate ──────────────────────────────
-          const allVisible =
-            rawShoulder.visibility! > VIS_THRESHOLD &&
-            rawElbow.visibility! > VIS_THRESHOLD &&
-            rawWrist.visibility! > VIS_THRESHOLD &&
-            rawHip.visibility! > VIS_THRESHOLD &&
-            rawKnee.visibility! > VIS_THRESHOLD &&
-            rawAnkle.visibility! > VIS_THRESHOLD;
-
+          const allVisible = [rawS, rawE, rawW, rawH, rawK, rawA].every(p => (p.visibility || 0) > VIS_SIDE);
           if (!allVisible) {
-            // Still draw faint skeleton
-            drawingUtils.drawConnectors(lm, POSE_CONNECTIONS, {
-              color: "rgba(255,255,255,0.08)",
-              lineWidth: 1,
-            });
             setPoseStatus("detecting");
             animFrameRef.current = requestAnimationFrame(detect);
             return;
           }
-
           setPoseStatus("detected");
 
-          // ─── 3. Smooth Positions ─────────────────────────────
           const sm = smoothersRef.current;
-          const shoulder = sm.shoulder.add(rawShoulder);
-          const elbow = sm.elbow.add(rawElbow);
-          const wrist = sm.wrist.add(rawWrist);
-          const hip = sm.hip.add(rawHip);
-          const knee = sm.knee.add(rawKnee);
-          const ankle = sm.ankle.add(rawAnkle);
-
-          // ─── 4. Angles (smoothed) ────────────────────────────
-          const rawElbowAngle = calculateAngle(shoulder, elbow, wrist);
-          const elbowAngle = elbowEMA.current.add(rawElbowAngle);
-
-          const rawHipAngle = calculateAngle(shoulder, hip, ankle);
-          const hipAngle = hipEMA.current.add(rawHipAngle);
-
-          const rawKneeAngle = calculateAngle(hip, knee, ankle);
-          const kneeAngle = kneeEMA.current.add(rawKneeAngle);
-
+          const S = sm.shoulder.add(rawS), E = sm.elbow.add(rawE), Wt = sm.wrist.add(rawW), Hi = sm.hip.add(rawH), K = sm.knee.add(rawK), A = sm.ankle.add(rawA);
+          
+          elbowAngle = elbowEMA.current.add(calculateAngle(S, E, Wt));
+          const hipAngle = hipEMA.current.add(calculateAngle(S, Hi, A));
+          const kneeAngle = kneeEMA.current.add(calculateAngle(Hi, K, A));
           const bodyErr = calculateErrorPct(180, hipAngle);
           const kneeErr = calculateErrorPct(180, kneeAngle);
 
-          // ─── 5. Rep Engine ───────────────────────────────────
-          const engine = repEngineRef.current;
-          tickRepEngine(engine, elbowAngle, performance.now(), A_UP, A_DOWN);
+          // Proximity
+          shoulderWidthPx = distance(lm[11], lm[12]) * W;
+          if (shoulderWidthPx < 100) drawBigIndicator(ctx, "MOVE CLOSER", "#facc15", W, H);
+          else if (shoulderWidthPx > 350) drawBigIndicator(ctx, "MOVE BACK", "#facc15", W, H);
 
-          // Notify parent only when reps actually change
+          // Anti-cheat depth
+          const depthTracker = depthTrackerRef.current;
+          depthTracker.setRequiredDrop(shoulderWidthPx, "side");
+          if (repEngineRef.current.phase === "UP") depthTracker.updateBaseline(S.y * H);
+          else depthTracker.trackDepth(S.y * H);
+          depthOk = depthTracker.checkValidity();
+          currentDepthSignal = depthTracker.depthSignal;
+          targetDepth = depthTracker.target;
+
+          // Drawing SIDE
+          drawLine(ctx, [S, Hi, A], W, H, bodyErr > 15 ? "#ff3b30" : "#a6d784", 5);
+          drawLine(ctx, [Hi, K, A], W, H, kneeErr > 15 ? "#ffa032" : "rgba(255,255,255,0.5)", 3);
+          drawLine(ctx, [S, E, Wt], W, H, "#78c8ff", 3);
+          [S, E, Wt, Hi, K, A].forEach(p => drawJoint(ctx, p, W, H, "#a6d784"));
+          drawMirroredText(ctx, `${Math.round(elbowAngle)}°`, E.x, E.y - 0.03, W, H, "700 18px Inter", "#78c8ff");
+        } else {
+          // FRONT MODE
+          const nose = lm[0], rawLS = lm[11], rawRS = lm[12], rawLE = lm[13], rawRE = lm[14], rawLW = lm[15], rawRW = lm[16];
+          const upperVisible = [rawLS, rawRS, rawLE, rawRE, rawLW, rawRW].every(p => (p.visibility || 0) > VIS_FRONT) && (nose.visibility || 0) > VIS_FRONT;
+
+          if (!upperVisible) {
+            setPoseStatus("detecting");
+            animFrameRef.current = requestAnimationFrame(detect);
+            return;
+          }
+          setPoseStatus("detected");
+
+          const fsm = frontSmoothersRef.current;
+          const LS = fsm.lShoulder.add(rawLS), RS = fsm.rShoulder.add(rawRS), LE = fsm.lElbow.add(rawLE), RE = fsm.rElbow.add(rawRE), LW = fsm.lWrist.add(rawLW), RW = fsm.rWrist.add(rawRW);
+          const LA = leftElbowEMA.current.add(calculateAngle(LS, LE, LW));
+          const RA = rightElbowEMA.current.add(calculateAngle(RS, RE, RW));
+
+          angleDiff = Math.abs(LA - RA);
+          isSymmetric = angleDiff <= 30;
+          elbowAngle = isSymmetric ? (LA + RA) / 2 : Math.min(LA, RA);
+
+          // Proximity
+          shoulderWidthPx = distance(LS, RS) * W;
+          if (shoulderWidthPx < 180) drawBigIndicator(ctx, "MOVE CLOSER", "#facc15", W, H);
+          else if (shoulderWidthPx > 450) drawBigIndicator(ctx, "MOVE BACK", "#facc15", W, H);
+
+          // Anti-cheat depth
+          const depthTracker = depthTrackerRef.current;
+          depthTracker.setRequiredDrop(shoulderWidthPx, "front");
+          const midShoulderY = (LS.y + RS.y) / 2 * H;
+          if (repEngineRef.current.phase === "UP") depthTracker.updateBaseline(midShoulderY);
+          else depthTracker.trackDepth(midShoulderY);
+          depthOk = depthTracker.checkValidity();
+
+          // Drawing FRONT
+          drawLine(ctx, [LS, LE, LW], W, H, "#78c8ff", 4);
+          drawLine(ctx, [RS, RE, RW], W, H, "#78c8ff", 4);
+          drawLine(ctx, [LS, RS], W, H, "rgba(166,215,132,0.5)", 3);
+          [LS, LE, LW, RS, RE, RW].forEach(p => drawJoint(ctx, p, W, H, "#a6d784"));
+          drawMirroredText(ctx, `${Math.round(LA)}°`, LE.x, LE.y - 0.03, W, H, "700 18px Inter", "#78c8ff");
+          drawMirroredText(ctx, `${Math.round(RA)}°`, RE.x, RE.y - 0.03, W, H, "700 18px Inter", "#78c8ff");
+        }
+
+        // ─── Shared Counting & Calibration ──────────────────────────
+        if (calibrationFramesRef.current < 60) {
+          calibrationFramesRef.current++;
+          maxAngleAccumRef.current.push(elbowAngle);
+          setCalibrationProgress(Math.round((calibrationFramesRef.current / 60) * 100));
+          if (calibrationFramesRef.current === 60) {
+            const avgMax = maxAngleAccumRef.current.reduce((a,b)=>a+b,0) / 60;
+            dynamicUpRef.current = clamp(avgMax - 5, 140, 160);
+          }
+        } else {
+          const engine = repEngineRef.current;
+          const prevPhase = engine.phase;
+          tickRepEngine(engine, elbowAngle, performance.now(), dynamicUpRef.current, A_DOWN);
+
+          if (prevPhase === "GOING_UP" && engine.phase === "UP") {
+             if (!isValidRepRef.current) engine.reps--; // Rollback if depth failed
+             depthTrackerRef.current.resetRep();
+             isValidRepRef.current = true;
+          }
+
+          if (engine.phase === "GOING_UP" && prevPhase === "DOWN") {
+             if (!depthOk) isValidRepRef.current = false;
+          }
+
           if (engine.reps !== lastRepCountRef.current) {
             lastRepCountRef.current = engine.reps;
             onRepChange?.(engine.reps);
           }
-
-          // Progress %
-          const rawProgress =
-            (elbowAngle - A_DOWN) / (A_UP - A_DOWN);
-          const progressUp = clamp(rawProgress, 0, 1);
-          const progressDown = 1 - progressUp;
-
-          const isDescending =
-            engine.phase === "UP" || engine.phase === "GOING_DOWN";
-
-          // ─── 6. DRAW ─────────────────────────────────────────
-
-          // A. Faint full skeleton (subtle)
-          drawingUtils.drawConnectors(lm, POSE_CONNECTIONS, {
-            color: "rgba(255,255,255,0.12)",
-            lineWidth: 1,
-          });
-
-          // B. Body line (Shoulder → Hip → Ankle)
-          const bodyColor =
-            bodyErr > 15
-              ? "rgba(255, 59, 48, 0.85)"
-              : "rgba(166, 215, 132, 0.85)";
-          drawLine(ctx, [shoulder, hip, ankle], W, H, bodyColor, 5);
-
-          // C. Knee line (Hip → Knee → Ankle)
-          const kneeColor =
-            kneeErr > 15
-              ? "rgba(255, 160, 50, 0.7)"
-              : "rgba(255, 255, 255, 0.5)";
-          drawLine(ctx, [hip, knee, ankle], W, H, kneeColor, 3);
-
-          // D. Arm line (Shoulder → Elbow → Wrist)
-          drawLine(
-            ctx,
-            [shoulder, elbow, wrist],
-            W,
-            H,
-            "rgba(120, 200, 255, 0.6)",
-            3,
-          );
-
-          // E. Joints
-          const goodColor = "#a6d784";
-          const warnColor = "#ff3b30";
-          drawJoint(ctx, shoulder, W, H, bodyErr > 15 ? warnColor : goodColor);
-          drawJoint(ctx, hip, W, H, bodyErr > 15 ? warnColor : goodColor);
-          drawJoint(ctx, ankle, W, H, goodColor);
-          drawJoint(ctx, knee, W, H, kneeErr > 15 ? "#ffa032" : goodColor);
-          drawJoint(ctx, elbow, W, H, "#78c8ff", 8);
-          drawJoint(ctx, wrist, W, H, "#78c8ff");
-
-          // F. Angle labels (mirrored text)
-          drawMirroredText(
-            ctx,
-            `${Math.round(elbowAngle)}°`,
-            elbow.x,
-            elbow.y - 0.03,
-            W,
-            H,
-            "700 18px 'Inter', sans-serif",
-            "#78c8ff",
-            "center",
-          );
-          drawMirroredText(
-            ctx,
-            `${Math.round(hipAngle)}°`,
-            hip.x,
-            hip.y - 0.025,
-            W,
-            H,
-            "600 14px 'Inter', sans-serif",
-            bodyErr > 15 ? warnColor : goodColor,
-            "center",
-          );
-          drawMirroredText(
-            ctx,
-            `${Math.round(kneeAngle)}°`,
-            knee.x,
-            knee.y + 0.04,
-            W,
-            H,
-            "600 14px 'Inter', sans-serif",
-            kneeErr > 15 ? "#ffa032" : "rgba(255,255,255,0.6)",
-            "center",
-          );
-
-          // G. Error Dashboard (top-left, counter-mirrored)
-          {
-            // Draw from the right side (because canvas is CSS-mirrored, right → appears left)
-            const bx = W - 20;
-            const by = 24;
-            const bw = 240;
-            const bh = 78;
-
-            ctx.save();
-            ctx.translate(bx, by);
-            ctx.scale(-1, 1);
-
-            // BG
-            ctx.fillStyle = "rgba(0,0,0,0.55)";
-            ctx.beginPath();
-            ctx.roundRect(0, 0, bw, bh, 12);
-            ctx.fill();
-            ctx.strokeStyle = "rgba(255,255,255,0.06)";
-            ctx.lineWidth = 1;
-            ctx.stroke();
-
-            // Title
-            ctx.font = "800 9px 'Inter', sans-serif";
-            ctx.fillStyle = "rgba(255,255,255,0.35)";
-            ctx.textAlign = "left";
-            ctx.letterSpacing = "2px";
-            ctx.fillText("FORM ANALYSIS", 14, 18);
-
-            // Body Error
-            ctx.font = "700 13px 'SF Mono', 'Fira Code', monospace";
-            ctx.fillStyle = bodyErr > 15 ? "#ff3b30" : "#a6d784";
-            ctx.fillText(
-              `Core straight error:  ${Math.round(bodyErr)}%`,
-              14,
-              38,
-            );
-
-            // Knee Error
-            ctx.fillStyle = kneeErr > 15 ? "#ffa032" : "#a6d784";
-            ctx.fillText(
-              `Knee straight error:  ${Math.round(kneeErr)}%`,
-              14,
-              58,
-            );
-
-            ctx.restore();
+          if (engine.phase !== lastPhaseRef.current) {
+            lastPhaseRef.current = engine.phase;
+            onPhaseChange?.(engine.phase);
           }
-
-          // H. Progress Indicators (UP green left, DOWN red right)
-          {
-            const barW = 36;
-            const barH = 160;
-            const margin = 50;
-            const barY = H / 2 - barH / 2;
-
-            // UP bar on the right side (appears left because mirrored)
-            drawProgressBar(
-              ctx,
-              W - margin,
-              barY,
-              barW,
-              barH,
-              progressUp,
-              "#a6d784",
-              isDescending ? "▼" : "UP",
-              `${Math.round(progressUp * 100)}%`,
-            );
-
-            // DOWN bar on the left side (appears right because mirrored)
-            drawProgressBar(
-              ctx,
-              margin + barW,
-              barY,
-              barW,
-              barH,
-              progressDown,
-              "#ff3b30",
-              isDescending ? "DOWN" : "▲",
-              `${Math.round(progressDown * 100)}%`,
-            );
-          }
-
-          // I. Rep counter badge on canvas (bottom center, mirrored)
-          {
-            const reps = engine.reps;
-            drawMirroredTextPx(
-              ctx,
-              `${reps}`,
-              W / 2,
-              H - 55,
-              "900 64px 'Inter', sans-serif",
-              "rgba(255,255,255,0.9)",
-              "center",
-            );
-            drawMirroredTextPx(
-              ctx,
-              "PUSH UPS",
-              W / 2,
-              H - 32,
-              "800 11px 'Inter', sans-serif",
-              "rgba(166, 215, 132, 0.7)",
-              "center",
-            );
-          }
-        } else {
-          setPoseStatus("detecting");
         }
-      } catch (err) {
-        console.warn("MediaPipe detect error:", err);
-        lastTimeRef.current = -1;
+
+        // ─── Shared HUD ─────────────────────────────────────────────
+        const engine = repEngineRef.current;
+        const rawProgress = (elbowAngle - A_DOWN) / (dynamicUpRef.current - A_DOWN);
+        const pUp = clamp(rawProgress, 0, 1), pDown = 1 - pUp;
+        const isD = engine.phase === "UP" || engine.phase === "GOING_DOWN";
+
+        // Progress bars
+        const barW = 36, barH = 160, margin = 50, barY = H/2 - barH/2;
+        drawProgressBar(ctx, W-margin, barY, barW, barH, pUp, "#a6d784", isD ? "▼" : "UP", `${Math.round(pUp*100)}%`);
+        drawProgressBar(ctx, margin+barW, barY, barW, barH, pDown, "#ff3b30", isD ? "DOWN" : "▲", `${Math.round(pDown*100)}%`);
+
+        // Analysis Box
+        const bx = W-20, by = 24, bw = 240, bh = 78;
+        ctx.save(); ctx.translate(bx, by); ctx.scale(-1, 1);
+        ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.beginPath(); ctx.roundRect(0, 0, bw, bh, 12); ctx.fill();
+        ctx.font = "800 10px Inter"; ctx.fillStyle = "rgba(255,255,255,0.4)"; ctx.fillText("FORM ANALYSIS", 14, 18);
+        ctx.font = "700 14px Inter"; 
+        ctx.fillStyle = depthOk ? "#a6d784" : "#ff3b30";
+        ctx.fillText(depthOk ? "Depth: OK ✓" : "Depth: SHALLOW", 14, 40);
+        if (mode === "front") {
+          ctx.fillStyle = isSymmetric ? "#a6d784" : "#fb923c";
+          ctx.fillText(isSymmetric ? "Symmetry: OK ✓" : "Symmetry: UNEVEN", 14, 60);
+        } else {
+          ctx.font = "700 12px Inter"; ctx.fillStyle = "white";
+          ctx.fillText(`Lockout: ${Math.round(dynamicUpRef.current)}°`, 14, 60);
+        }
+        ctx.restore();
+
+        // Big Rep Counter
+        drawMirroredTextPx(ctx, `${engine.reps}`, W/2, H-60, "900 80px Inter", "white");
+      } else {
+        setPoseStatus("detecting");
       }
+    } catch (err) { console.warn(err); }
+    animFrameRef.current = requestAnimationFrame(detect);
+  }, [videoRef, landmarker, mode, onRepChange, onPhaseChange]);
 
-      animFrameRef.current = requestAnimationFrame(detect);
-    },
-    [videoRef, landmarker, onRepChange, onPhaseChange],
-  );
-
-  // ─── Loop Control ──────────────────────────────────────────────────
   useEffect(() => {
     let active = true;
-    const startLoop = () => {
-      if (active && isRunning && landmarker) {
-        lastTimeRef.current = -1;
-        animFrameRef.current = requestAnimationFrame(detect);
-      }
-    };
-    const timeout = setTimeout(startLoop, 600);
-    return () => {
-      active = false;
-      clearTimeout(timeout);
-      if (animFrameRef.current) {
-        cancelAnimationFrame(animFrameRef.current);
-        animFrameRef.current = 0;
-      }
-    };
+    const start = () => { if (active && isRunning && landmarker) animFrameRef.current = requestAnimationFrame(detect); };
+    setTimeout(start, 600);
+    return () => { active = false; cancelAnimationFrame(animFrameRef.current); };
   }, [isRunning, detect, landmarker]);
 
-  // ─── JSX ───────────────────────────────────────────────────────────
+  // Reset on mode change
+  useEffect(() => {
+    repEngineRef.current = createRepEngine();
+    lastRepCountRef.current = 0;
+    calibrationFramesRef.current = 0;
+    maxAngleAccumRef.current = [];
+    depthTrackerRef.current = new BodyDepthTracker();
+    setCalibrationProgress(0);
+  }, [mode]);
+
   return (
     <>
-      <canvas
-        ref={canvasRef}
-        className="absolute inset-0 w-full h-full scale-x-[-1] pointer-events-none"
-        style={{ zIndex: 11 }}
-      />
-
-      {/* Status Pills */}
-      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 pointer-events-none">
-        {poseStatus === "loading" && (
-          <div className="glass px-5 py-2.5 rounded-full flex items-center gap-2.5 animate-pulse border border-yellow-500/20">
-            <div className="w-2 h-2 bg-yellow-400 rounded-full" />
-            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-yellow-400">
-              Loading AI Model…
-            </span>
-          </div>
-        )}
+      <canvas ref={canvasRef} className="absolute inset-0 w-full h-full scale-x-[-1] pointer-events-none" style={{ zIndex: 11 }} />
+      <div className="absolute top-6 left-1/2 -translate-x-1/2 z-30 pointer-events-none flex flex-col items-center gap-3">
         {poseStatus === "detecting" && (
-          <div className="glass px-5 py-2.5 rounded-full flex items-center gap-2.5 border border-amber-500/20">
-            <div className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" />
-            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-400">
-              Position yourself for push-ups
-            </span>
+          <div className="glass px-10 py-6 rounded-[2rem] border border-white/10 flex flex-col items-center gap-4 animate-in fade-in zoom-in duration-500">
+            <h3 className="text-xl font-black uppercase italic text-primary">Setup Checklist</h3>
+            <ul className="text-sm font-bold opacity-80 space-y-2 text-center">
+              {mode === "front" ? (
+                <><li>✓ Laptop on desk</li><li>✓ Step back 1-2 steps</li><li>✓ Arms in frame</li></>
+              ) : (
+                <><li>✓ Laptop to the side</li><li>✓ Full body in frame</li><li>✓ Good lighting</li></>
+              )}
+            </ul>
           </div>
         )}
-        {poseStatus === "detected" && (
-          <div className="glass px-5 py-2.5 rounded-full flex items-center gap-2.5 border border-emerald-500/20">
+        {calibrationProgress > 0 && calibrationProgress < 100 && (
+          <div className="glass px-6 py-2 rounded-full border border-primary/40 flex items-center gap-3">
+            <div className="w-2 h-2 bg-primary rounded-full animate-ping" />
+            <span className="text-[10px] font-black uppercase tracking-widest text-primary">Calibrating Lockout: {calibrationProgress}%</span>
+          </div>
+        )}
+        {poseStatus === "detected" && calibrationProgress === 100 && (
+          <div className="glass px-5 py-2 rounded-full border border-emerald-500/20 flex items-center gap-2">
             <div className="w-2 h-2 bg-emerald-400 rounded-full" />
-            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-400">
-              Tracking Active
-            </span>
+            <span className="text-[10px] font-black uppercase tracking-widest text-emerald-400">Tracking Active</span>
           </div>
         )}
       </div>
     </>
   );
+}
+
+function drawProgressBar(ctx: CanvasRenderingContext2D, x: number, y: number, barW: number, barH: number, progress: number, color: string, label: string, pct: string) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(-1, 1);
+  ctx.fillStyle = "rgba(0,0,0,0.4)"; ctx.beginPath(); ctx.roundRect(-barW, 0, barW, barH, 8); ctx.fill();
+  const fillH = barH * clamp(progress, 0, 1); ctx.fillStyle = color;
+  ctx.beginPath(); ctx.roundRect(-barW, barH - fillH, barW, fillH, 8); ctx.fill();
+  ctx.font = "900 24px Inter"; ctx.fillStyle = color; ctx.textAlign = "center"; ctx.fillText(label, -barW/2, -10);
+  ctx.font = "700 14px Inter"; ctx.fillStyle = "white"; ctx.fillText(pct, -barW/2, barH + 20);
+  ctx.restore();
 }
