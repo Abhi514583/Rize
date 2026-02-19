@@ -59,7 +59,7 @@ export default function RootLayout({
               </Link>
             </div>
           </nav>
-          <main className="max-w-7xl mx-auto mesh-gradient min-h-[calc(100vh-64px)]">
+          <main className="mesh-gradient min-h-[calc(100vh-64px)]">
             {children}
           </main>
         </PoseProvider>
