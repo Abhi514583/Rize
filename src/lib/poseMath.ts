@@ -171,3 +171,78 @@ export function tickRepEngine(
 
   return engine;
 }
+
+// ─── Geometry Helpers ────────────────────────────────────────────────
+/** Euclidean distance between two points (in whatever coord space). */
+export function distance(a: Point, b: Point): number {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+/** Midpoint of two points. */
+export function avgPoint(a: Point, b: Point): Point {
+  return {
+    x: (a.x + b.x) / 2,
+    y: (a.y + b.y) / 2,
+    visibility: Math.min(a.visibility ?? 0, b.visibility ?? 0),
+  };
+}
+
+// ─── Front-mode drop tracker (anti-cheat) ────────────────────────────
+/**
+ * Tracks vertical shoulder/nose movement during a rep to reject micro-bends.
+ * Call `onFrame()` each frame with the midShoulder position (in PIXELS).
+ * Call `meetsDropRequirement()` before confirming DOWN state.
+ * Call `resetRep()` when returning to UP.
+ */
+export class FrontRepTracker {
+  /** Baseline shoulder width in pixels (updated via EMA) */
+  shoulderWidthPx = 0;
+  private swEMA = new EMA(0.15); // slow-moving baseline
+
+  /** Per-rep tracking */
+  private repStartY = 0;   // midShoulder Y at rep start (UP position)
+  private maxDropPx = 0;    // max (currentY - repStartY) seen so far
+  private tracking = false;
+
+  /** Feed shoulder width each frame to maintain baseline. */
+  updateShoulderWidth(widthPx: number) {
+    this.shoulderWidthPx = this.swEMA.add(widthPx);
+  }
+
+  /** Start tracking a new descent. */
+  startDescent(midShoulderYPx: number) {
+    if (!this.tracking) {
+      this.repStartY = midShoulderYPx;
+      this.maxDropPx = 0;
+      this.tracking = true;
+    }
+  }
+
+  /** Feed midShoulder Y each frame during descent. */
+  onFrame(midShoulderYPx: number) {
+    if (!this.tracking) return;
+    const drop = midShoulderYPx - this.repStartY; // positive = moved down
+    if (drop > this.maxDropPx) this.maxDropPx = drop;
+  }
+
+  /** Minimum required drop in pixels. */
+  get minDropPx(): number {
+    return Math.max(this.shoulderWidthPx * 0.10, 18);
+  }
+
+  /** True if the user dropped far enough. */
+  meetsDropRequirement(): boolean {
+    return this.maxDropPx >= this.minDropPx;
+  }
+
+  /** Get actual drop for HUD display. */
+  get currentDropPx(): number {
+    return this.maxDropPx;
+  }
+
+  /** Reset when returning to UP. */
+  resetRep() {
+    this.tracking = false;
+    this.maxDropPx = 0;
+  }
+}

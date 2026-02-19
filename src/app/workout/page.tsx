@@ -3,7 +3,9 @@
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import PoseOverlay from "~/components/PoseOverlay";
+import PoseOverlay, { type CameraMode } from "~/components/PoseOverlay";
+
+const MODE_KEY = "rize_camera_mode";
 
 export default function WorkoutPage() {
   const [reps, setReps] = useState(0);
@@ -11,10 +13,24 @@ export default function WorkoutPage() {
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
   const [startTime, setStartTime] = useState<number | null>(null);
+  const [cameraMode, setCameraMode] = useState<CameraMode>("front");
   const router = useRouter();
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+
+  // Load persisted mode
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem(MODE_KEY);
+      if (saved === "front" || saved === "side") setCameraMode(saved);
+    }
+  }, []);
+
+  const switchMode = (m: CameraMode) => {
+    setCameraMode(m);
+    localStorage.setItem(MODE_KEY, m);
+  };
 
   const startCamera = async () => {
     setIsInitializing(true);
@@ -96,6 +112,7 @@ export default function WorkoutPage() {
             <PoseOverlay 
               videoRef={videoRef} 
               isRunning={!isInitializing && !cameraError} 
+              mode={cameraMode}
               onRepChange={setReps}
             />
           </>
@@ -142,6 +159,41 @@ export default function WorkoutPage() {
               </span>
             </div>
           </div>
+        </div>
+
+        {/* Camera Mode Selector — below top bar */}
+        <div className="flex justify-center mt-4 pointer-events-auto">
+          <div className="glass rounded-full p-1 flex gap-1 border border-white/10">
+            <button
+              onClick={() => switchMode("front")}
+              className={`px-5 py-2 rounded-full text-[10px] font-black uppercase tracking-[0.15em] transition-all duration-300 ${
+                cameraMode === "front"
+                  ? "bg-primary text-white shadow-lg shadow-primary/30"
+                  : "text-white/50 hover:text-white/80"
+              }`}
+            >
+              📱 Front (Compact)
+            </button>
+            <button
+              onClick={() => switchMode("side")}
+              className={`px-5 py-2 rounded-full text-[10px] font-black uppercase tracking-[0.15em] transition-all duration-300 ${
+                cameraMode === "side"
+                  ? "bg-primary text-white shadow-lg shadow-primary/30"
+                  : "text-white/50 hover:text-white/80"
+              }`}
+            >
+              📐 Side (Strict)
+            </button>
+          </div>
+        </div>
+
+        {/* Mode Instruction Hint */}
+        <div className="flex justify-center mt-2 pointer-events-none">
+          <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-white/30 text-center max-w-sm">
+            {cameraMode === "front"
+              ? "Place laptop on desk, step back 1–2 steps, keep shoulders/elbows/wrists in frame"
+              : "Place laptop to the side, keep full body in frame"}
+          </p>
         </div>
 
         {/* Center: Reps Display (Floating) */}
