@@ -67,7 +67,7 @@ export default function WorkoutPage() {
   };
 
   return (
-    <div className="relative h-[calc(100vh-64px)] w-full overflow-hidden bg-black font-sans">
+    <div className="relative h-screen w-full overflow-hidden bg-black font-sans -mt-16">
       <div className="absolute inset-0 z-0 text-white">
         {cameraError ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900 p-8 text-center z-50">
